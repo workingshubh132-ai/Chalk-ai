@@ -44,7 +44,46 @@ Chalk AI is a modern, practical AI-powered assistant designed to help teachers w
 - **Modular Components** - Reusable React components
 - **Responsive UI** - Mobile-first design approach
 
-## 📋 Getting Started
+## 🚀 Quick Start
+
+### Local Development (5 minutes)
+
+1. **Clone & Install**
+   ```bash
+   git clone https://github.com/workingshubh132-ai/Chalk-ai.git
+   cd Chalk-ai
+   npm install
+   ```
+
+2. **Setup Environment**
+   ```bash
+   cp .env.example .env
+   ```
+
+3. **Add Your Keys**
+   - MongoDB: `mongodb://localhost:27017/chalk-ai` (local) or MongoDB Atlas
+   - OpenAI: Get key from https://platform.openai.com/api-keys
+   - JWT Secret: Any random string
+
+4. **Run**
+   ```bash
+   npm run dev
+   ```
+   Visit `http://localhost:3000`
+
+### ☁️ Deploy to Vercel (2 minutes)
+
+For a live version, see [VERCEL_DEPLOYMENT.md](./VERCEL_DEPLOYMENT.md) for step-by-step instructions.
+
+**Quick Deploy:**
+1. Push to GitHub
+2. Connect repo to Vercel at https://vercel.com
+3. Add environment variables (MONGODB_URI, OPENAI_API_KEY, JWT_SECRET)
+4. Deploy!
+
+---
+
+## 📋 Detailed Getting Started
 
 ### Prerequisites
 - Node.js 18+
@@ -74,9 +113,10 @@ Chalk AI is a modern, practical AI-powered assistant designed to help teachers w
    MONGODB_URI=mongodb://localhost:27017/chalk-ai
    OPENAI_API_KEY=sk-your-api-key
    JWT_SECRET=your-secret-key
+   VITE_API_URL=http://localhost:3000/api
    ```
 
-4. **Start MongoDB**
+4. **Start MongoDB** (if using local)
    ```bash
    # Make sure MongoDB is running locally or use MongoDB Atlas
    mongod
@@ -125,7 +165,7 @@ chalk-ai/
 │   │   │   ├── types.ts     # TypeScript interfaces
 │   │   │   └── utils.ts     # Helper functions
 │   │   └── tsconfig.json
-│   ├── backend/             # Express server
+│   ├── backend/             # Express server (local dev)
 │   │   ├── src/
 │   │   │   ├── index.ts     # Main server entry
 │   │   │   ├── db.ts        # MongoDB connection
@@ -141,9 +181,31 @@ chalk-ai/
 │       │   ├── context/     # React context
 │       │   └── App.tsx
 │       └── tsconfig.json
-├── .env.example            # Environment template
+├── api/                    # Vercel Serverless Functions
+│   ├── auth.ts            # Authentication endpoints
+│   ├── chat.ts            # Chat & conversation endpoints
+│   └── documents.ts       # Document generation endpoints
+├── vercel.json            # Vercel deployment config
+├── VERCEL_DEPLOYMENT.md   # Deployment guide
+├── .env.example           # Environment template
 ├── package.json           # Root package config
 └── README.md
+```
+
+## 🌐 Deployment Architectures
+
+### Local Development
+```
+Frontend (React) → Backend Express Server
+      ↓                    ↓
+Localhost:3000    Localhost:5000
+```
+
+### Vercel Production
+```
+Frontend (Vite) → Vercel CDN → Serverless Functions
+                                    ↓
+                              MongoDB Atlas
 ```
 
 ## 🔌 API Endpoints

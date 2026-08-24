@@ -10,17 +10,27 @@
   ],
   "scripts": {
     "dev": "concurrently \"npm --workspace=packages/backend run dev\" \"npm --workspace=packages/frontend run dev\"",
-    "build": "npm --workspace=packages/backend run build && npm --workspace=packages/frontend run build",
+    "build": "npm --workspace=packages/frontend run build",
     "start": "npm --workspace=packages/backend run start",
     "lint": "eslint --ext .ts,.tsx packages/",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "vercel-build": "npm --workspace=packages/frontend run build"
   },
   "devDependencies": {
+    "@types/node": "^20.6.0",
+    "@vercel/node": "^3.0.0",
     "concurrently": "^8.2.0",
     "eslint": "^8.50.0",
     "typescript": "^5.2.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "jsonwebtoken": "^9.1.0",
+    "mongoose": "^7.5.0",
+    "openai": "^4.11.1"
   },
   "engines": {
     "node": ">=18.0.0"
   }
 }
+
