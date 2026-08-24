@@ -1,0 +1,26 @@
+{
+  "name": "chalk-ai",
+  "version": "1.0.0",
+  "description": "AI teacher assistant for creating sheets, presentations, checklists, and more",
+  "private": true,
+  "workspaces": [
+    "packages/frontend",
+    "packages/backend",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm --workspace=packages/backend run dev\" \"npm --workspace=packages/frontend run dev\"",
+    "build": "npm --workspace=packages/backend run build && npm --workspace=packages/frontend run build",
+    "start": "npm --workspace=packages/backend run start",
+    "lint": "eslint --ext .ts,.tsx packages/",
+    "type-check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.0",
+    "eslint": "^8.50.0",
+    "typescript": "^5.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
