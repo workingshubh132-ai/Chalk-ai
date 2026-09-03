@@ -1,29 +1,13 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import mongoose from 'mongoose';
+import { createClient } from '@supabase/supabase-js';
 import bcryptjs from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 
-const MONGODB_URI = process.env.MONGODB_URI || '';
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const JWT_SECRET = process.env.JWT_SECRET || 'chalk-ai-secret-key';
 
-const userSchema = new mongoose.Schema({
-  email: { type: String, required: true, unique: true },
-  name: { type: String, required: true },
-  role: { type: String, enum: ['teacher', 'admin'], default: 'teacher' },
-  subject: String,
-  gradeLevel: String,
-  avatar: String,
-  password: { type: String, required: true },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
-});
-
-const UserModel = mongoose.models.User || mongoose.model('User', userSchema);
-
-async function connectDB() {
-  if (mongoose.connection.readyState === 1) return;
-  await mongoose.connect(MONGODB_URI);
-}
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -40,36 +24,51 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    await connectDB();
-
     if (req.method === 'POST' && req.url?.includes('register')) {
       const { email, name, password, subject, gradeLevel } = req.body;
 
-      const existingUser = await UserModel.findOne({ email });
+      // Check if user exists
+      const { data: existingUser, error: checkError } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', email)
+        .single();
+
       if (existingUser) {
         return res.status(400).json({ error: 'Email already registered' });
       }
 
+      // Hash password
       const hashedPassword = await bcryptjs.hash(password, 10);
-      const user = await UserModel.create({
-        email,
-        name,
-        password: hashedPassword,
-        subject,
-        gradeLevel,
-        role: 'teacher',
-      });
 
-      const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
+      // Create user
+      const { data: user, error: createError } = await supabase
+        .from('users')
+        .insert([
+          {
+            email,
+            name,
+            password_hash: hashedPassword,
+            subject,
+            grade_level: gradeLevel,
+          },
+        ])
+        .select()
+        .single();
+
+      if (createError) {
+        return res.status(400).json({ error: 'Registration failed' });
+      }
+
+      const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
       return res.json({
         token,
         user: {
-          id: user._id,
+          id: user.id,
           email: user.email,
           name: user.name,
-          role: user.role,
           subject: user.subject,
-          gradeLevel: user.gradeLevel,
+          gradeLevel: user.grade_level,
         },
       });
     }
@@ -77,26 +76,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (req.method === 'POST' && req.url?.includes('login')) {
       const { email, password } = req.body;
 
-      const user = await UserModel.findOne({ email });
+      // Get user
+      const { data: user, error: queryError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', email)
+        .single();
+
       if (!user) {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
-      const validPassword = await bcryptjs.compare(password, user.password);
+      // Verify password
+      const validPassword = await bcryptjs.compare(password, user.password_hash);
       if (!validPassword) {
         return res.status(401).json({ error: 'Invalid credentials' });
       }
 
-      const token = jwt.sign({ userId: user._id }, JWT_SECRET, { expiresIn: '7d' });
+      const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
       return res.json({
         token,
         user: {
-          id: user._id,
+          id: user.id,
           email: user.email,
           name: user.name,
-          role: user.role,
           subject: user.subject,
-          gradeLevel: user.gradeLevel,
+          gradeLevel: user.grade_level,
         },
       });
     }

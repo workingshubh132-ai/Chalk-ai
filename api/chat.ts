@@ -1,43 +1,14 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
-import mongoose from 'mongoose';
+import { createClient } from '@supabase/supabase-js';
 import jwt from 'jsonwebtoken';
 import { OpenAI } from 'openai';
 
-const MONGODB_URI = process.env.MONGODB_URI || '';
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const JWT_SECRET = process.env.JWT_SECRET || 'chalk-ai-secret-key';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 
-const messageSchema = new mongoose.Schema({
-  id: String,
-  role: { type: String, enum: ['user', 'assistant'] },
-  content: String,
-  attachments: [{ id: String, name: String, url: String, type: String, size: Number }],
-  createdAt: { type: Date, default: Date.now },
-});
-
-const conversationSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  title: { type: String, default: 'New Conversation' },
-  preview: String,
-  messages: [messageSchema],
-  documentGenerated: {
-    id: String,
-    type: String,
-    title: String,
-    description: String,
-    downloadUrl: String,
-    createdAt: Date,
-  },
-  createdAt: { type: Date, default: Date.now },
-  updatedAt: { type: Date, default: Date.now },
-});
-
-const ConversationModel = mongoose.models.Conversation || mongoose.model('Conversation', conversationSchema);
-
-async function connectDB() {
-  if (mongoose.connection.readyState === 1) return;
-  await mongoose.connect(MONGODB_URI);
-}
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 function verifyToken(token: string) {
   try {
@@ -84,39 +55,59 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
-    await connectDB();
-
     if (req.method === 'POST' && req.url?.includes('message')) {
       const { conversationId, message } = req.body;
       const userId = decoded.userId;
 
-      let conversation = conversationId
-        ? await ConversationModel.findOne({ _id: conversationId, userId })
-        : null;
+      let conversation;
 
-      if (!conversation) {
-        conversation = await ConversationModel.create({
-          userId,
-          title: message.slice(0, 50),
-          preview: message.slice(0, 100),
-          messages: [],
-        });
+      if (conversationId) {
+        const { data } = await supabase
+          .from('conversations')
+          .select('*')
+          .eq('id', conversationId)
+          .eq('user_id', userId)
+          .single();
+        conversation = data;
       }
 
-      const userMessage = {
-        id: `msg-${Date.now()}`,
-        role: 'user',
-        content: message,
-        createdAt: new Date(),
-      };
+      if (!conversation) {
+        const { data: newConv } = await supabase
+          .from('conversations')
+          .insert([
+            {
+              user_id: userId,
+              title: message.slice(0, 50),
+              preview: message.slice(0, 100),
+            },
+          ])
+          .select()
+          .single();
+        conversation = newConv;
+      }
 
-      conversation.messages.push(userMessage);
+      // Save user message
+      await supabase.from('messages').insert([
+        {
+          conversation_id: conversation.id,
+          role: 'user',
+          content: message,
+        },
+      ]);
 
-      const messages = conversation.messages.map((msg: any) => ({
+      // Get all messages for context
+      const { data: allMessages } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', conversation.id)
+        .order('created_at', { ascending: true });
+
+      const messages = (allMessages || []).map((msg: any) => ({
         role: msg.role,
         content: msg.content,
       }));
 
+      // Call OpenAI
       const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
       const response = await openai.chat.completions.create({
         model: 'gpt-4o-mini',
@@ -130,50 +121,77 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const assistantContent = response.choices[0].message.content || '';
 
-      const assistantMessage = {
-        id: `msg-${Date.now()}-assist`,
-        role: 'assistant',
-        content: assistantContent,
-        createdAt: new Date(),
-      };
+      // Save assistant message
+      const { data: assistantMessage } = await supabase
+        .from('messages')
+        .insert([
+          {
+            conversation_id: conversation.id,
+            role: 'assistant',
+            content: assistantContent,
+          },
+        ])
+        .select()
+        .single();
 
-      conversation.messages.push(assistantMessage);
-      conversation.updatedAt = new Date();
-      await conversation.save();
+      // Update conversation
+      await supabase
+        .from('conversations')
+        .update({ updated_at: new Date().toISOString() })
+        .eq('id', conversation.id);
 
       return res.json({
-        conversationId: conversation._id,
+        conversationId: conversation.id,
         message: assistantMessage,
       });
     }
 
     if (req.method === 'GET' && req.url?.includes('conversations')) {
       const userId = decoded.userId;
-      const conversations = await ConversationModel.find({ userId })
-        .sort({ updatedAt: -1 })
-        .limit(20)
-        .select('_id title preview createdAt updatedAt');
+      const { data: conversations } = await supabase
+        .from('conversations')
+        .select('id, title, preview, created_at, updated_at')
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false })
+        .limit(20);
 
-      return res.json(conversations);
+      return res.json(conversations || []);
     }
 
     if (req.method === 'GET' && req.url?.includes('conversation/')) {
       const id = req.url.split('/').pop();
       const userId = decoded.userId;
 
-      const conversation = await ConversationModel.findOne({ _id: id, userId });
+      const { data: conversation } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('id', id)
+        .eq('user_id', userId)
+        .single();
+
       if (!conversation) {
         return res.status(404).json({ error: 'Conversation not found' });
       }
 
-      return res.json(conversation);
+      const { data: messages } = await supabase
+        .from('messages')
+        .select('*')
+        .eq('conversation_id', id)
+        .order('created_at', { ascending: true });
+
+      return res.json({ ...conversation, messages: messages || [] });
     }
 
     if (req.method === 'DELETE' && req.url?.includes('conversation/')) {
       const id = req.url.split('/').pop();
       const userId = decoded.userId;
 
-      await ConversationModel.deleteOne({ _id: id, userId });
+      await supabase
+        .from('conversations')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', userId);
+
       return res.json({ success: true });
     }
 

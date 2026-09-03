@@ -1,9 +1,14 @@
 import { VercelRequest, VercelResponse } from '@vercel/node';
+import { createClient } from '@supabase/supabase-js';
 import jwt from 'jsonwebtoken';
 import { OpenAI } from 'openai';
 
+const SUPABASE_URL = process.env.SUPABASE_URL || '';
+const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const JWT_SECRET = process.env.JWT_SECRET || 'chalk-ai-secret-key';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 function verifyToken(token: string) {
   try {
@@ -71,15 +76,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       const content = response.choices[0].message.content || '';
 
-      const document = {
-        id: `doc-${Date.now()}`,
-        type,
-        title,
-        description,
-        conversationId,
-        userId,
-        createdAt: new Date(),
-      };
+      // Save document to database
+      const { data: document } = await supabase
+        .from('documents')
+        .insert([
+          {
+            conversation_id: conversationId,
+            user_id: userId,
+            type,
+            title,
+            description,
+          },
+        ])
+        .select()
+        .single();
 
       return res.json({
         document,
