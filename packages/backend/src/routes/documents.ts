@@ -1,17 +1,20 @@
 import express, { Request, Response } from 'express';
 import { OpenAI } from 'openai';
-import { DocumentMeta } from '@chalk-ai/shared';
+import { getSupabase } from '../db';
 
 export const documentsRouter = express.Router();
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+function getOpenAI() {
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+}
 
 documentsRouter.post('/generate', async (req: Request, res: Response) => {
   try {
     const { conversationId, type, title, description } = req.body;
     const userId = req.userId!;
+    const supabase = getSupabase();
 
     const prompts = {
       spreadsheet: `Create a CSV spreadsheet for: ${title}\nDescription: ${description}\n\nProvide the data in CSV format with headers and sample data.`,
@@ -23,7 +26,8 @@ documentsRouter.post('/generate', async (req: Request, res: Response) => {
 
     const prompt = prompts[type as keyof typeof prompts] || prompts.spreadsheet;
 
-    const response = await openai.chat.completions.create({
+    const openaiClient = getOpenAI();
+    const response = await openaiClient.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         {
@@ -38,19 +42,34 @@ documentsRouter.post('/generate', async (req: Request, res: Response) => {
     });
 
     const content = response.choices[0].message.content || '';
+    const docId = `doc-${Date.now()}`;
 
-    const document: DocumentMeta = {
-      id: `doc-${Date.now()}`,
-      type: type as any,
-      title,
-      description,
-      conversationId,
-      userId,
-      createdAt: new Date(),
-    };
+    const { data: document } = await supabase
+      .from('documents')
+      .insert([
+        {
+          id: docId,
+          user_id: userId,
+          conversation_id: conversationId,
+          type,
+          title,
+          description,
+          content,
+        },
+      ])
+      .select()
+      .single();
 
     res.json({
-      document,
+      document: {
+        id: document.id,
+        type: document.type,
+        title: document.title,
+        description: document.description,
+        conversationId: document.conversation_id,
+        userId: document.user_id,
+        createdAt: document.created_at,
+      },
       preview: content.slice(0, 500),
       fullContent: content,
     });

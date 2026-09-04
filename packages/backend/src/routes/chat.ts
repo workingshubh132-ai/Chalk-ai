@@ -1,13 +1,15 @@
 import express, { Request, Response } from 'express';
 import { OpenAI } from 'openai';
-import { ConversationModel } from '../models/Conversation';
-import { generateId, parsePrompt } from '@chalk-ai/shared';
+import { getSupabase } from '../db';
+import { generateId } from '@chalk-ai/shared';
 
 export const chatRouter = express.Router();
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+function getOpenAI() {
+  return new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY,
+  });
+}
 
 const SYSTEM_PROMPT = `You are Chalk AI, an intelligent teacher assistant designed to help educators with their daily tasks. You specialize in:
 
@@ -30,35 +32,57 @@ chatRouter.post('/message', async (req: Request, res: Response) => {
   try {
     const { conversationId, message } = req.body;
     const userId = req.userId!;
+    const supabase = getSupabase();
 
-    let conversation = conversationId
-      ? await ConversationModel.findOne({ _id: conversationId, userId })
-      : null;
-
-    if (!conversation) {
-      conversation = await ConversationModel.create({
-        userId,
-        title: message.slice(0, 50),
-        preview: message.slice(0, 100),
-        messages: [],
-      });
+    let conversationData: any;
+    if (conversationId) {
+      const { data } = await supabase
+        .from('conversations')
+        .select('*')
+        .eq('id', conversationId)
+        .eq('user_id', userId)
+        .single();
+      conversationData = data;
     }
 
-    const userMessage = {
-      id: generateId(),
-      role: 'user' as const,
-      content: message,
-      createdAt: new Date(),
-    };
+    if (!conversationData) {
+      const { data } = await supabase
+        .from('conversations')
+        .insert([
+          {
+            user_id: userId,
+            title: message.slice(0, 50),
+            preview: message.slice(0, 100),
+          },
+        ])
+        .select()
+        .single();
+      conversationData = data;
+    }
 
-    conversation.messages.push(userMessage);
+    const userMsgId = generateId();
+    await supabase.from('messages').insert([
+      {
+        id: userMsgId,
+        conversation_id: conversationData.id,
+        role: 'user',
+        content: message,
+      },
+    ]);
 
-    const messages = conversation.messages.map((msg) => ({
+    const { data: messagesData } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', conversationData.id)
+      .order('created_at', { ascending: true });
+
+    const messages = (messagesData || []).map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
 
-    const response = await openai.chat.completions.create({
+    const openaiClient = getOpenAI();
+    const response = await openaiClient.chat.completions.create({
       model: 'gpt-4o-mini',
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -69,21 +93,30 @@ chatRouter.post('/message', async (req: Request, res: Response) => {
     });
 
     const assistantContent = response.choices[0].message.content || '';
+    const assistantMsgId = generateId();
 
-    const assistantMessage = {
-      id: generateId(),
-      role: 'assistant' as const,
-      content: assistantContent,
-      createdAt: new Date(),
-    };
+    await supabase.from('messages').insert([
+      {
+        id: assistantMsgId,
+        conversation_id: conversationData.id,
+        role: 'assistant',
+        content: assistantContent,
+      },
+    ]);
 
-    conversation.messages.push(assistantMessage);
-    conversation.updatedAt = new Date();
-    await conversation.save();
+    await supabase
+      .from('conversations')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', conversationData.id);
 
     res.json({
-      conversationId: conversation._id,
-      message: assistantMessage,
+      conversationId: conversationData.id,
+      message: {
+        id: assistantMsgId,
+        role: 'assistant',
+        content: assistantContent,
+        createdAt: new Date(),
+      },
     });
   } catch (error) {
     console.error('Chat error:', error);
@@ -94,13 +127,17 @@ chatRouter.post('/message', async (req: Request, res: Response) => {
 chatRouter.get('/conversations', async (req: Request, res: Response) => {
   try {
     const userId = req.userId!;
-    const conversations = await ConversationModel.find({ userId })
-      .sort({ updatedAt: -1 })
-      .limit(20)
-      .select('_id title preview createdAt updatedAt');
+    const supabase = getSupabase();
+    const { data } = await supabase
+      .from('conversations')
+      .select('id, title, preview, created_at, updated_at')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+      .limit(20);
 
-    res.json(conversations);
+    res.json(data || []);
   } catch (error) {
+    console.error('Fetch conversations error:', error);
     res.status(500).json({ error: 'Failed to fetch conversations' });
   }
 });
@@ -109,14 +146,28 @@ chatRouter.get('/conversation/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const userId = req.userId!;
+    const supabase = getSupabase();
 
-    const conversation = await ConversationModel.findOne({ _id: id, userId });
+    const { data: conversation } = await supabase
+      .from('conversations')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', userId)
+      .single();
+
     if (!conversation) {
       return res.status(404).json({ error: 'Conversation not found' });
     }
 
-    res.json(conversation);
+    const { data: messages } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('conversation_id', id)
+      .order('created_at', { ascending: true });
+
+    res.json({ ...conversation, messages: messages || [] });
   } catch (error) {
+    console.error('Fetch conversation error:', error);
     res.status(500).json({ error: 'Failed to fetch conversation' });
   }
 });
@@ -125,10 +176,17 @@ chatRouter.delete('/conversation/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const userId = req.userId!;
+    const supabase = getSupabase();
 
-    await ConversationModel.deleteOne({ _id: id, userId });
+    await supabase
+      .from('conversations')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', userId);
+
     res.json({ success: true });
   } catch (error) {
+    console.error('Delete conversation error:', error);
     res.status(500).json({ error: 'Failed to delete conversation' });
   }
 });
